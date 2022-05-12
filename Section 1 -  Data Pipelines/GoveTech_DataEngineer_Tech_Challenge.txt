@@ -1,0 +1,129 @@
+package GoveTech_DataEngineer_Tech_Challenge
+
+
+import org.apache.spark.SparkConf
+import org.apache.spark.SparkContext
+import org.apache.spark.sql.SQLContext
+import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.Row
+import org.apache.spark.sql.hive.HiveContext
+import org.apache.log4j.{Level, Logger}
+import java.util.Properties
+import org.apache.spark.sql.SaveMode
+
+
+object GoveTech_DataEngineer_Tech_Challenge {
+  
+def main(args: Array[String]):Unit=
+		{
+  try
+  {
+    
+        println("******************************************************************************")
+        println("--------------Process Started--------------------------------------------------")
+        println("******************************************************************************")
+    
+        Logger.getLogger("org").setLevel(Level.OFF)
+        Logger.getLogger("akka").setLevel(Level.OFF)
+        
+        println("Process Started..................................................")
+				val config=new SparkConf().setAppName("Data Ingestion").setMaster("local[*]")
+				config.set("spark.driver.allowMultipleContexts","true")		
+				config.set("mapreduce.reduce.memory.mb", "5120")
+				config.set("mapreduce.map.memory.mb", "4096")
+
+				val sc=new SparkContext(config)
+				val sqlContext= new HiveContext(sc)
+				sc.setLogLevel("ERROR")
+				import sqlContext.implicits._
+
+				sqlContext.setConf("spark.driver.maxResultSize","20g")
+
+				println("******************************************************************************")
+				println("------------- Create JDBC connection -----------------------------------------")
+				println("******************************************************************************")
+
+				val url = "jdbc:mysql://127.0.0.1/govtech?useUnicode=true&characterEncoding=utf8&serverTimezone=GMT"
+				val driver = "com.mysql.jdbc.Driver"
+				val user = "root"
+				val pass = "cloudera"
+				val sourceTable = "govtechuser_price_rawdata"
+
+				val con = sqlContext.read.format("jdbc")
+				.option("url", url)
+				.option("driver", driver)				
+				.option("user", user)
+				.option("password", pass)				
+
+				println("******************************************************************************")
+				println("------------ JDBC connection sucessfully Established--------------------------")
+				println("******************************************************************************")			
+
+				println("******************************************************************************")				
+				println("------------ View Raw data----------------------------------------------------")
+				println("******************************************************************************")
+
+				val rawDataDF = con.option("dbtable", sourceTable)
+				.load()
+				rawDataDF.show(false)				
+				println()
+				
+        println("******************************************************************************")
+        println("--------------Delete any rows which do not have a name------------------------")
+        println("******************************************************************************")
+		    val rawDataDF0 = 	rawDataDF.filter("name is not NULL").toDF()
+        rawDataDF0.show(false)
+ 
+        val rawDataDF2  =  rawDataDF0.withColumn("name",regexp_replace(col("name"),  "Mr. ", "Mr."))
+                                      .withColumn("name",regexp_replace(col("name"),  "Mrs. ", "Mrs."))
+         
+        println("******************************************************************************")
+        println("--------------Split the name field into first_name, and last_name-------------")
+        println("******************************************************************************")
+        
+				val namesplitDF = rawDataDF2.select(split(col("name")," ").getItem(0).as("first_name"),
+                            split(col("name")," ").getItem(1).as("last_name"),
+                            col("price"))  
+        namesplitDF.show(false)					
+				namesplitDF.printSchema()
+        
+				println("******************************************************************************")
+        println("--------------Remove any zeros prepended to the price field-------------------")
+        println("******************************************************************************")
+      				
+        val removeZerosPrependedDF =  namesplitDF.filter("price > 0")
+        removeZerosPrependedDF.show(false)					
+				removeZerosPrependedDF.printSchema()
+     
+			  println("*************************************************************************************************************")
+        println("------Create a new field named above_100, which is true if the price is strictly greater than 100------------")
+        println("*************************************************************************************************************")
+        
+        val FinalOutputDF = removeZerosPrependedDF.withColumn("above_100",
+                                        when(col("price") >100,
+                                        lit("true"))
+                                        .otherwise(lit("false")))
+         FinalOutputDF.show(false)         
+          
+	      println("********************************************************************************")
+			  println("---------------------------- Insert Mysql Database------------------------------")
+			  println("********************************************************************************")
+			
+			  
+			  val url1 = "jdbc:mysql://localhost:3306/govtech?useUnicode=true&characterEncoding=utf8&autoReconnect=true&failOverReadOnly=false"
+			  val connectionProperties = new Properties()
+        connectionProperties.put("user","root")
+        connectionProperties.put("password","cloudera")
+        connectionProperties.put("driver", "com.mysql.jdbc.Driver")
+        FinalOutputDF.write.mode(SaveMode.Append).jdbc(url1, "govtechuser_price_details", connectionProperties)
+			  
+  			println("******************************************************************************")
+  			println("--- Process Completed---------------------------------------------------------")
+  			println("******************************************************************************")
+		
+				 } catch {
+			case e : Throwable => println("Error : +  ", e)
+			}
+		}
+}
